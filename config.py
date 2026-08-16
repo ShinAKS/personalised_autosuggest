@@ -43,3 +43,6 @@ CATEGORIES = [
 ]
 
 SAMPLE_PER_CATEGORY = 750
+
+SOLR_URL = "http://localhost:8983/solr"
+SOLR_CORE = "items"

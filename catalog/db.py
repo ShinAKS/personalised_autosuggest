@@ -65,3 +65,19 @@ def get_or_create_taxonomy_path(conn: sqlite3.Connection, breadcrumb: list[str])
             node_id = cur.lastrowid
         parent_id = node_id
     return node_id
+
+
+def taxonomy_path(conn: sqlite3.Connection, taxonomy_id: int | None) -> list[str]:
+    """Walk from a leaf taxonomy node up to the root, returning the breadcrumb (root-first)."""
+    path = []
+    node_id = taxonomy_id
+    while node_id is not None:
+        row = conn.execute(
+            "SELECT name, parent_id FROM taxonomy WHERE id = ?", (node_id,)
+        ).fetchone()
+        if row is None:
+            break
+        name, parent_id = row
+        path.append(name)
+        node_id = parent_id
+    return list(reversed(path))

@@ -4,7 +4,7 @@ import json
 
 import requests
 
-from catalog.db import get_connection, get_or_create_taxonomy_path, init_schema
+from catalog.db import get_connection, get_or_create_taxonomy_path, init_schema, taxonomy_path
 from config import CATEGORIES, HF_DATASET, SAMPLE_PER_CATEGORY
 
 
@@ -116,15 +116,8 @@ def main():
         """
     ).fetchall()
     for title, leaf_id in samples:
-        path = []
-        node_id = leaf_id
-        while node_id is not None:
-            name, parent_id = conn.execute(
-                "SELECT name, parent_id FROM taxonomy WHERE id = ?", (node_id,)
-            ).fetchone()
-            path.append(name)
-            node_id = parent_id
-        print(f"  {' > '.join(reversed(path))}  ::  {title[:60]}")
+        path = taxonomy_path(conn, leaf_id)
+        print(f"  {' > '.join(path)}  ::  {title[:60]}")
 
     conn.close()
 

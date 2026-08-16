@@ -20,6 +20,46 @@ Streams product metadata for all 33 [Amazon Reviews 2023](https://huggingface.co
 
 Current ingested catalog: **24,640 items**, **8,884 taxonomy nodes**.
 
+## Candidate generation with Solr (Phase 2)
+
+Solr is the **candidate generator**: given partial query text, it returns the top-N matching items by relevance. It does *not* do personalization or ranking-model scoring — that's a separate, app-layer step planned for Phase 4/5 (see [Plan.MD](Plan.MD)). Solr's job here is just fast, relevant prefix/text matching over `title` and the flattened `taxonomy_path` for every item.
+
+**Run Solr** (via Docker):
+
+```bash
+docker run -d --name solr-autosuggest -p 8983:8983 solr:9 solr-precreate items
+```
+
+**Set up the schema and index the catalog:**
+
+```bash
+source .venv/bin/activate
+python -m catalog.solr_schema   # adds the title/taxonomy_path/store/price/rating fields + a prefix-matching field type
+python -m catalog.index_solr    # pushes all items from data/catalog.db into Solr
+```
+
+The `title` field uses a custom `text_prefix` field type (edge n-grams at index time, e.g. `hammock` → `ha`, `ham`, `hamm`, ...) so a partial query like `hamm` matches `Hammock` — this is what makes it behave like autosuggest rather than plain full-text search.
+
+**Query it:**
+
+```bash
+python -m catalog.suggest "wireless headph"
+```
+
+or hit Solr directly:
+
+```bash
+curl -s "http://localhost:8983/solr/items/select" \
+  --get \
+  --data-urlencode "q=title:guitar" \
+  --data-urlencode "defType=edismax" \
+  --data-urlencode "qf=title^2 taxonomy_path" \
+  --data-urlencode "rows=5" \
+  --data-urlencode "fl=title,taxonomy_path,score" | python3 -m json.tool
+```
+
+or browse `http://localhost:8983/solr/#/items/query` in the browser for an interactive query UI.
+
 ## Schema
 
 **`items`** — one row per product
