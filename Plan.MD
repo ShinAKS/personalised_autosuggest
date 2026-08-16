@@ -17,8 +17,10 @@ This is a staged build — each phase produces something runnable before the nex
 
 - Python, `datasets` (HF) for ingestion, SQLite for local storage (items, taxonomy, users, events) — easy to swap for Postgres later
 - FastAPI + uvicorn for the API
-- SQLite FTS5 (or a simple trie) for prefix/text candidate generation — no external search infra needed for prototype scale
+- **Solr** for candidate generation (prefix/text match over item title + taxonomy path), replacing the earlier SQLite FTS5 plan — SQLite remains the source-of-truth store for items/taxonomy/users/events, Solr is a query-time index built from it
 - scikit-learn / LightGBM for the ranking model (tabular features, not deep two-tower — appropriate at this data scale)
+
+**Decision on Solr's role**: Solr's Learning-to-Rank (LTR) plugin can accept a model directly as a query param (`rq={!ltr model=... efi.*=...}`), but that requires converting the model to Solr's supported format (linear/LambdaMART) and re-defining every feature in Solr's own feature-store DSL — duplicated effort at a stage where the feature set is still changing. Solr is scoped to **candidate generation only**; ranking stays in the app layer (Phase 4/5) so the model can be trained/iterated on freely with LightGBM directly. Revisit Solr LTR later only if the extra network hop between candidate gen and rerank becomes a measured latency problem.
 
 ## Phase 0 — Repo scaffold
 - `pyproject.toml`/`requirements.txt`, package layout: `catalog/`, `api/`, `models/`, `data/` (gitignored cache dir)
@@ -30,8 +32,9 @@ This is a staged build — each phase produces something runnable before the nex
 - Load into SQLite; sanity-check counts and a few sample breadcrumbs per category
 
 ## Phase 2 — Candidate generation (non-personalized autosuggest, working end-to-end)
-- SQLite FTS5 virtual table over `title` + taxonomy path text
-- `catalog/suggest.py`: given a text prefix/query, return top-N matching items ranked by simple text relevance (FTS rank + popularity/rating as tiebreak)
+- Run Solr locally (single core, e.g. `items`), define a schema covering `parent_asin`, `title` (text field with edge n-gram/suggester analysis for prefix match), taxonomy path text, `store`, `average_rating`, `price`
+- `catalog/index_solr.py`: reads items from SQLite (Phase 1's output) and pushes them into the Solr core via its update API
+- `catalog/suggest.py`: given a text prefix/query, hit Solr's query endpoint and return top-N matching items ranked by Solr's relevance score (+ rating as tiebreak)
 - This phase's output is a working, non-personalized suggest function — validates the data pipeline before any ML is added
 
 ## Phase 3 — Synthetic demographic-preference bootstrap dataset
@@ -46,7 +49,7 @@ This is a staged build — each phase produces something runnable before the nex
 
 ## Phase 5 — API
 - FastAPI service (`api/main.py`):
-  - `POST /suggest {text, user_id, demographics}` → candidate gen (Phase 2) → re-rank (Phase 4, using stored or passed demographics) → ranked items
+  - `POST /suggest {text, user_id, demographics}` → candidate gen (Phase 2, Solr query) → re-rank (Phase 4 model, applied in the app layer using stored or passed demographics) → ranked items
   - `POST /select {user_id, query, item_id}` → logs the event (Phase 6)
 - `user_id` demographics stored in a `users` table on first sight (or passed each call, cached)
 
@@ -59,4 +62,4 @@ This is a staged build — each phase produces something runnable before the nex
 - Ingest a couple of categories, confirm taxonomy/item counts look right
 - Run API locally; `curl /suggest` for a prefix, confirm reasonable non-personalized results (validates Phase 2/5)
 - Simulate a user issuing several `/select` events toward one taxonomy branch, then re-query the same prefix and confirm ranking shifts toward that branch (validates Phase 6)
-- Basic unit tests for taxonomy parsing and the FTS query function
+- Basic unit tests for taxonomy parsing and the Solr query-building function
