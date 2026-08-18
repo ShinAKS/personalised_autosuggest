@@ -46,3 +46,14 @@ SAMPLE_PER_CATEGORY = 750
 
 SOLR_URL = "http://localhost:8983/solr"
 SOLR_CORE = "items"
+
+# Phase 3 — synthetic demographic-preference bootstrap
+# Minimal/extensible demographic schema: a "segment" is one (age_bracket, gender, region) triple.
+AGE_BRACKETS = ["13-17", "18-24", "25-34", "35-44", "45-54", "55-64", "65+"]
+GENDERS = ["female", "male", "nonbinary"]
+REGIONS = ["US-Northeast", "US-South", "US-Midwest", "US-West"]
+
+NUM_SYNTHETIC_USERS = 500
+SESSIONS_PER_USER_RANGE = (8, 40)  # simulated suggest queries per synthetic user
+SYNTHETIC_SELECT_PROBABILITY = 0.65  # chance a simulated suggest query ends in a select
+SYNTHETIC_RANDOM_SEED = 42

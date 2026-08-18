@@ -28,6 +28,40 @@ CREATE TABLE IF NOT EXISTS items (
 
 CREATE INDEX IF NOT EXISTS idx_items_taxonomy ON items(taxonomy_id);
 CREATE INDEX IF NOT EXISTS idx_taxonomy_parent ON taxonomy(parent_id);
+
+CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    age_bracket TEXT NOT NULL,
+    gender TEXT NOT NULL,
+    region TEXT NOT NULL,
+    is_synthetic INTEGER NOT NULL DEFAULT 0
+);
+
+-- Bootstrap prior: how strongly a demographic segment leans toward a top-level
+-- taxonomy category. Synthetic (Phase 3) until real events (Phase 6) take over.
+CREATE TABLE IF NOT EXISTS demographic_affinity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    age_bracket TEXT NOT NULL,
+    gender TEXT NOT NULL,
+    region TEXT NOT NULL,
+    taxonomy_root_id INTEGER NOT NULL REFERENCES taxonomy(id),
+    weight REAL NOT NULL,
+    UNIQUE(age_bracket, gender, region, taxonomy_root_id)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(user_id),
+    event_type TEXT NOT NULL CHECK(event_type IN ('suggest', 'select')),
+    query_text TEXT NOT NULL,
+    parent_asin TEXT REFERENCES items(parent_asin),
+    source TEXT NOT NULL DEFAULT 'real' CHECK(source IN ('real', 'synthetic')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id);
+CREATE INDEX IF NOT EXISTS idx_demographic_affinity_segment
+    ON demographic_affinity(age_bracket, gender, region);
 """
 
 
@@ -65,6 +99,20 @@ def get_or_create_taxonomy_path(conn: sqlite3.Connection, breadcrumb: list[str])
             node_id = cur.lastrowid
         parent_id = node_id
     return node_id
+
+
+def taxonomy_roots(conn: sqlite3.Connection) -> dict[int, int]:
+    """Map every taxonomy node id to its root ancestor id, via one full-table scan."""
+    parent_of = dict(conn.execute("SELECT id, parent_id FROM taxonomy").fetchall())
+    root_cache: dict[int, int] = {}
+
+    def resolve(node_id: int) -> int:
+        if node_id not in root_cache:
+            parent_id = parent_of.get(node_id)
+            root_cache[node_id] = node_id if parent_id is None else resolve(parent_id)
+        return root_cache[node_id]
+
+    return {node_id: resolve(node_id) for node_id in parent_of}
 
 
 def taxonomy_path(conn: sqlite3.Connection, taxonomy_id: int | None) -> list[str]:

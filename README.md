@@ -60,6 +60,38 @@ curl -s "http://localhost:8983/solr/items/select" \
 
 or browse `http://localhost:8983/solr/#/items/query` in the browser for an interactive query UI.
 
+## Synthetic demographic-preference bootstrap (Phase 3)
+
+The real catalog has no user demographics or interaction history, so before a ranking
+model can be trained there's nothing to train it *on*. This phase manufactures a clearly
+labeled synthetic dataset — synthetic users, a demographic → taxonomy-affinity prior, and
+simulated suggest/select events consistent with that prior — to give Phase 4's ranker a
+non-trivial cold-start signal. It's a bootstrap, not real user data: `users.is_synthetic`
+and `events.source = 'synthetic'` mark it as such, and it's fully superseded by real
+events once Phase 6's feedback loop has enough volume.
+
+```bash
+source .venv/bin/activate
+python -m bootstrap.generate
+```
+
+This is idempotent — rerunning replaces all synthetic users/affinity/events rather than
+accumulating them. It:
+
+- Defines a minimal demographic schema — `age_bracket` × `gender` × `region` — where each
+  combination is a "segment" (`config.py`)
+- Builds a `demographic_affinity` table: each segment gets a weight over every top-level
+  taxonomy root, derived by matching root names into ~9 interest clusters (electronics,
+  fashion & beauty, home & living, family, media, health & grocery, sports/outdoors/auto,
+  hobbies & crafts, gifts) and applying illustrative per-age/gender/region bias vectors
+  through a softmax (`bootstrap/affinity.py`) — these biases are placeholders to make the
+  bootstrap data non-trivial, not claims about real demographic behavior
+- Generates synthetic `users` with random demographics (`bootstrap/users.py`)
+- Simulates suggest/select sessions per user, sampling a taxonomy branch by that user's
+  segment affinity, then an item from it, then a partial-typing query prefix from its
+  title — writing `suggest` events always and paired `select` events with configurable
+  probability (`bootstrap/events.py`)
+
 ## Schema
 
 **`items`** — one row per product
@@ -92,6 +124,40 @@ CREATE TABLE taxonomy (
 ```
 
 When the source data has a real category breadcrumb (e.g. most of `Electronics`), the item gets a multi-level path. When it doesn't (e.g. most of `All_Beauty`, `Digital_Music`), it falls back to a single-level node from `main_category`.
+
+**`users`**, **`demographic_affinity`**, **`events`** — added in Phase 3, populated with synthetic data for now (see above)
+
+```sql
+CREATE TABLE users (
+    user_id TEXT PRIMARY KEY,
+    age_bracket TEXT NOT NULL,
+    gender TEXT NOT NULL,
+    region TEXT NOT NULL,
+    is_synthetic INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE demographic_affinity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    age_bracket TEXT NOT NULL,
+    gender TEXT NOT NULL,
+    region TEXT NOT NULL,
+    taxonomy_root_id INTEGER NOT NULL REFERENCES taxonomy(id),
+    weight REAL NOT NULL,
+    UNIQUE(age_bracket, gender, region, taxonomy_root_id)
+);
+
+CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(user_id),
+    event_type TEXT NOT NULL CHECK(event_type IN ('suggest', 'select')),
+    query_text TEXT NOT NULL,
+    parent_asin TEXT REFERENCES items(parent_asin),   -- set for 'select', NULL for 'suggest'
+    source TEXT NOT NULL DEFAULT 'real' CHECK(source IN ('real', 'synthetic')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+`events` doubles as the log for Phase 5's `/suggest` and `/select` API calls, tagged `source = 'real'` — the same shape as the synthetic bootstrap data so Phase 4's training pipeline doesn't need to special-case either one.
 
 ## Sample data
 
